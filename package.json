@@ -4,11 +4,18 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts"
+    "start": "tsx src/server.ts",
+    "client": "tsx src/x402-client.ts",
+    "payment-flow": "tsx src/x402-payment-flow.ts",
+    "demo-payment": "tsx src/demo-x402-payment.ts"
   },
   "dependencies": {
+    "@hiero-ledger/sdk": "^2.85.0",
+    "@x402/core": "^2.25.0",
+    "@x402/hedera": "^2.25.0",
     "dotenv": "^16.4.7",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "protobufjs": "8.0.1"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
