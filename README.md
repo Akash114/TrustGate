@@ -89,6 +89,15 @@ x402 provides the payment protocol for machine-to-machine HTTP payments.
 
 TrustGate uses the Hedera implementation of the x402 exact payment scheme and the facilitator for payment verification and settlement.
 
+**Demo Payment Script:** Run `npm run demo-payment` to see a demonstration of the complete x402 payment flow:
+- Client signer creation with `@x402/hedera`
+- Transaction building structure
+- Payment requirements parsing from 402 response
+- Settlement flow via official facilitator at https://x402-hedera-production.up.railway.app/
+- HashScan verification links generated
+
+To enable live Hedera Testnet payments, fund accounts at https://portal.hedera.com/dispensatory and update `.env` with your Account IDs and Private Keys. See `memory/story-2-7-fund-testnet-accounts.md` for setup instructions.
+
 ### HCS — Hedera Consensus Service
 
 HCS is used as the append-only audit and reputation layer.
