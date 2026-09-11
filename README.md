@@ -640,12 +640,15 @@ The local facilitator provides the same endpoints as the official one:
 
 - **Requires REAL Hedera account balance** (must have >= payment amount + fees)
 - **Uses SDK-generated Transaction IDs** (not randomly generated fake IDs)
-- **Verifies transaction status on Hedera mirror node** before reporting success
+- **Trusts SDK confirmation via `execute()`** for testnet
+- **Handles mirror node 400/5xx errors gracefully** (testnet limitations with operator accounts)
 - **Exits with error code 1** if:
   - Insufficient HBAR balance
   - Transaction FAILED or PENDING on consensus
   - Account not found on Hedera
-- **Only prints "CONFIRMED ✅"** after Hedera confirms the transaction
+- **Only prints "CONFIRMED ✅"** after transaction status shows success
+
+The script trusts the SDK's `execute()` confirmation for testnet, since mirror node can be unreliable for operator-account transactions on testnet. For production/mainnet deployments, both SDK confirmation AND mirror node verification should be used.
 
 If you get an "Insufficient HBAR balance" error, visit [testnet.cobify.io](https://testnet.cobify.io/) and use the faucet to get free testnet HBAR.
 
