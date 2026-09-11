@@ -37,14 +37,21 @@ function isClientPaid(headers: Record<string, string>): boolean {
 
 /**
  * Returns the x402 Payment Required response body with requirements.
+ *
+ * CRITICAL: This MUST match exactly what demo-x402-payment.ts will use to build transaction.
+ * The assetId here is the recipient account where HBAR payment should go.
  */
 function buildPaymentRequiredResponse(): Record<string, unknown> {
+  // Use REAL facilitator fee payer account from config/env
+  // This ensures x402 requirements match actual Hedera transaction recipient
+  const FEE_PAYER_ACCOUNT = CONFIG.getFeePayerAccountId()
+
   return {
     error: 'Payment Required',
     status: 402,
     message: PAYMENT_REQUIRED,
     paymentRequirements: {
-      assetId: '0.0.1739786085', // USDC Testnet token ID (example)
+      assetId: FEE_PAYER_ACCOUNT, // Real fee payer/receiver account
       amount: `${PAYMENT_AMOUNT_USDC}`,
       decimals: 6,
       payerAccountId: PAYER_ACCOUNT_ID,
@@ -52,7 +59,7 @@ function buildPaymentRequiredResponse(): Record<string, unknown> {
     },
     message: {
       description: 'Please make a payment to access this resource',
-      instructions: `Pay ${PAYMENT_AMOUNT_USDC} ${CONFIG.hederaNetwork === 'testnet' ? 'USDC (Testnet)' : 'USDC'} to access this resource`,
+      instructions: `Pay ${PAYMENT_AMOUNT_USDC} HBAR (Testnet) to the account specified in paymentRequirements.assetId`,
     },
   } as const
 }

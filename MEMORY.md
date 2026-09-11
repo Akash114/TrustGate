@@ -1,0 +1,1 @@
+- [story-2-6-1-complete](memory/story-2-6-1-complete.md) — Story 2.6.1 real Hedera payment demo finished

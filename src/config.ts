@@ -1,5 +1,5 @@
 import { config } from 'dotenv'
-import { Client } from '@hiero-ledger/sdk'
+import { Client, AccountId } from '@hiero-ledger/sdk'
 
 config()
 
@@ -13,11 +13,26 @@ export const CONFIG = {
   facilitatorUrl: process.env.FACILITATOR_URL,
   hcsNodeUrl: process.env.HCS_NODE_URL,
 
+  // x402 Facilitator Fee Payer Account (real recipient for payments)
+  facilitatorFeePayerId: process.env.FACILITATOR_FEE_PAYER_ID || '0.0.fee.x402.testnet.demo',
+
   // Check if operator credentials are configured
   hasOperatorCredentials(): boolean {
     return !!(this.operatorId && this.operatorPrivateKey)
   },
 }
+
+// Add a method to get the fee payer account ID as string
+Object.assign(CONFIG, {
+  getFeePayerAccountId(): string {
+    // Return real facilitator fee payer account from .env
+    return CONFIG.facilitatorFeePayerId || '0.0.fee.x402.testnet.demo'
+  },
+
+  hasFacilitatorCredentials(): boolean {
+    return !!(CONFIG.facilitatorFeePayerId)
+  },
+})
 
 export function validateConfig(): void {
   // Port validation
