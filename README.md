@@ -459,18 +459,18 @@ Returns relevant interaction records and verification references.
 
 ## 13. Technology Stack
 
-- **Hedera Testnet**
-- **x402**
-- **@x402/hedera**
-- **Hedera Agent Kit**
-- **Hedera Consensus Service (HCS)**
-- **HCS-10 / Registry Broker**
-- **Hedera Scheduled Transactions**
-- **Node.js**
-- **TypeScript**
-- **Express**
-- **HashScan**
-- **x402 facilitator**
+- **Hedera Testnet** (`hedera:testnet`)
+- **x402 Protocol** (HTTP 402 Payment Required)
+- **@x402/core v2.25.0** (Payment requirements parsing)
+- **@x402/hedera v2.25.0** (Client signer API for @hiero-ledger/sdk)
+- **@hiero-ledger/sdk v2.85.0** (Account, transaction, Mirror Node SDK)
+- **Hedera Agent Kit** (AI agent commerce library)
+- **Hedera Consensus Service (HCS)** (Reputation ledger via HCS-10)
+- **HCS-10 / Registry Broker** (Service discovery)
+- **Hedera Scheduled Transactions** (Protected payment path)
+- **HashScan** (Transaction verification - https://hashscan.io/testnet)
+- **Node.js + TypeScript + Express**
+- **Local x402 Facilitator** (Standalone HTTP server on port 3002)
 
 ---
 
@@ -576,3 +576,91 @@ The MVP combines x402 payments, Hedera-native scheduled transactions, HCS-based 
 
 **Status:** MVP Development  
 **Target:** ETHOnline 2026 — AI & Agentic Payments on Hedera
+
+---
+
+## Setup
+
+### Running the Local x402 Facilitator
+
+When the online facilitator is unavailable, run the local version for testing:
+
+```bash
+# Clone official @x402-hedera repo
+git clone https://github.com/hedera-dev/x402-hedera.git /tmp/x402-hedera-official
+cd /tmp/x402-hedera-official
+
+# Copy facilitator example to local-facilitator
+mkdir -p /home/ubuntu22/projects/hackathon/trustGate/local-facilitator
+cp /tmp/x402-hedera-official/examples/typescript/facilitator/index.ts \
+   /home/ubuntu22/projects/hackathon/trustGate/local-facilitator/
+
+# Start local facilitator on port 3002
+cd /home/ubuntu22/projects/hackathon/trustGate/local-facilitator
+npx tsx index.ts &
+
+# Test it's running
+curl http://localhost:3002/health
+```
+
+The local facilitator provides the same endpoints as the official one:
+- `GET /health` - Health check
+- `POST /verify` - Verify x402 payment signature
+- `POST /settle` - Settle transaction via facilitator
+
+### Running TrustGate Server
+
+1. **Install dependencies:**
+   ```bash
+   npm install
+   ```
+
+2. **Configure environment:**
+   - Copy `.env.example` to `.env`
+   - Fund accounts at [Hedera Testnet Faucet](https://testnet.cobify.io/) or [Hedera Portal](https://portal.hedera.com/dispensatory)
+   - Update `.env` with Account IDs and Private Keys
+
+3. **Start the server:**
+   ```bash
+   npm start
+   ```
+
+4. **Run demo payment (demonstrates REAL x402 flow on Hedera Testnet):**
+   ```bash
+   npm run demo-payment
+   ```
+
+5. **Verify on HashScan:**
+   - Visit https://hashscan.io/testnet/
+   - Search for the Transaction ID shown in the demo output
+
+### Demo Payment Behavior
+
+**Story 2.6.1 Changes:** The payment demo now ONLY succeeds when a real Hedera transaction is submitted and confirmed:
+
+- **Requires REAL Hedera account balance** (must have >= payment amount + fees)
+- **Uses SDK-generated Transaction IDs** (not randomly generated fake IDs)
+- **Verifies transaction status on Hedera mirror node** before reporting success
+- **Exits with error code 1** if:
+  - Insufficient HBAR balance
+  - Transaction FAILED or PENDING on consensus
+  - Account not found on Hedera
+- **Only prints "CONFIRMED ✅"** after Hedera confirms the transaction
+
+If you get an "Insufficient HBAR balance" error, visit [testnet.cobify.io](https://testnet.cobify.io/) and use the faucet to get free testnet HBAR.
+
+### Complete Flow
+
+```text
+1. Fund your testnet account:          → Use faucet at https://testnet.cobify.io/
+2. Start local facilitator (optional):  → npx tsx local-facilitator/index.ts &
+3. Start TrustGate server:             → npm start
+4. Run demo payment with REAL HBAR:    → npm run demo-payment
+5. Verify transaction on HashScan:     → https://hashscan.io/testnet/
+```
+
+---
+
+For live Hedera Testnet payments, fund accounts at the Faucet and ensure your account has sufficient balance before running `npm run demo-payment`.
+
+---
