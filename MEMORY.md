@@ -7,4 +7,4 @@
 - [story-3-2-final-report](memory/story-3-2-final-report.md) — Story 3.2 final completion report
 - [story-4-1-complete](memory/story-4-1-complete.md) — Story 4.1 deterministic reputation service complete (MVP scoring rules working, score = min(successfulPayments × 10, 100))
 - [story-4-2-complete](memory/story-4-2-complete.md) — Story 4.2 Trust-Based Payment Routing implementation and tests verified
-- [story-5-2-complete](memory/story-5-2-complete.md) — Story 5.2 Hedera Scheduled Payment implementation complete
+- [story-5-3-complete](memory/story-5-3-complete.md) — Story 5.3 Schedule Lifecycle verification complete

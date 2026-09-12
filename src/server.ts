@@ -9,6 +9,10 @@ import ProtectedPaymentService, {
   type ProtectedPaymentIntent,
 } from './protected-payment.js'
 import { HederaProtectedPaymentService } from './protected-payment-hcs.js'
+import { ScheduleStatusService, createScheduleStatusService } from './schedule-status-service.js'
+
+// Initialize Schedule Status Service for Story 5.3 (lifecycle verification)
+const scheduleStatusService = createScheduleStatusService()
 
 // Validate config on startup
 validateConfig()
@@ -427,24 +431,49 @@ app.get('/payments/protected/:intentId', async (req, res) => {
       intent = _protectedPaymentService.getIntent(intentId) || undefined
     }
 
-    // Try to query Hedera blockchain directly for schedule info if available
+    // Try to query Hedera blockchain directly for schedule info if real schedule exists
     const hederaScheduleInfo = await (_hederaProtectedPaymentService as any)?.getScheduleOnChain(intentId)
 
-    if (hederaScheduleInfo) {
-      // Return with Hedera blockchain-verified status
-      return res.json({
-        success: true,
-        intentId: hederaScheduleInfo.intentId,
-        ...hederaScheduleInfo,
-      })
+    // Also try ScheduleStatusService for lifecycle verification (Story 5.3)
+    let actualHederaStatus: typeof hederaScheduleInfo | null = null
+
+    if (hederaScheduleInfo?.scheduleId) {
+      // If we have a real scheduleId, query it via ScheduleStatusService
+      try {
+        actualHederaStatus = await scheduleStatusService.getStatus(hederaScheduleInfo.scheduleId!)
+
+        // Return with blockchain-verified status from real Hedera
+        return res.json({
+          success: true,
+          intentId: hederaScheduleInfo.intentId || actualHederaStatus.scheduleId,
+          scheduleId: actualHederaStatus.scheduleId,
+          txId: hederaScheduleInfo.txId,
+          network: hederaScheduleInfo.network,
+          status: actualHederaStatus.status,
+          state: actualHederaStatus.state,
+          createdAt: intent?.createdAt,
+          isScheduled: true,
+        })
+      } catch (scheduleQueryError) {
+        // If schedule query fails, continue with local storage info
+        console.warn('ScheduleStatusService: Failed to query real schedule:',
+          scheduleQueryError instanceof Error ? scheduleQueryError.message : String(scheduleQueryError))
+      }
     }
 
-    // Return stored intent if found
+    // Return stored intent if found (mock intent or pending)
     if (intent) {
+      // For mock intents, ensure scheduleId is null and flag appropriately
+      const responseIntent = { ...intent }
+      delete responseIntent.scheduleId // Remove for mock intents to avoid confusion
+      delete responseIntent.txId
+
       res.json({
         success: true,
-        intentId: intent.intentId,
-        ...intent,
+        intentId: responseIntent.intentId,
+        ...responseIntent,
+        isScheduled: !!hederaScheduleInfo?.scheduleId, // Only true if real schedule exists
+        mockIntent: !hederaScheduleInfo?.scheduleId, // Explicitly mark as mock if no real schedule
       })
       return
     }
