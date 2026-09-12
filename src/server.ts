@@ -3,6 +3,12 @@ import { CONFIG, validateConfig, createHederaClient } from './config'
 import type { AccountId, PaymentRecord } from '@hiero-ledger/sdk'
 import HcsRepository from './hcs.js'
 import ReputationService, { InMemoryPaymentRepository } from './reputation.js'
+import TrustPolicy, { PaymentRoutingLevel } from './trust-policy.js'
+import ProtectedPaymentService, {
+  ProtectedPaymentIntentStatus,
+  type ProtectedPaymentIntent,
+} from './protected-payment.js'
+import { HederaProtectedPaymentService } from './protected-payment-hcs.js'
 
 // Validate config on startup
 validateConfig()
@@ -208,7 +214,46 @@ try {
   console.error('Reputation Service: Failed to initialize:', error instanceof Error ? error.message : error)
 }
 
-// Health check endpoint with optional Hedera status, HCS info, and reputation service info
+// Initialize ProtectedPaymentService (Story 5.1 MVP - mock intents)
+let _protectedPaymentService: ProtectedPaymentService | null = null
+try {
+  const network = CONFIG.hederaNetwork || 'testnet'
+  _protectedPaymentService = new ProtectedPaymentService(network)
+  console.log('ProtectedPaymentService initialized')
+} catch (error) {
+  console.error('ProtectedPaymentService: Failed to initialize:', error instanceof Error ? error.message : error)
+}
+
+// Initialize HederaProtectedPaymentService for scheduled payments (Story 5.2)
+let _hederaProtectedPaymentService: HederaProtectedPaymentService | null = null
+try {
+  const network = CONFIG.hederaNetwork || 'testnet'
+
+  // Create Hedera protected payment service with operator credentials if available
+  const scheduleTtlSeconds = parseInt(process.env.SCHEDULE_TTL_SECONDS, 10) || 604800 // Default: 7 days
+
+  _hederaProtectedPaymentService = new HederaProtectedPaymentService(
+    network,
+    CONFIG.operatorId?.toString(),
+    scheduleTtlSeconds,
+  )
+
+  console.log('HederaProtectedPaymentService initialized (Story 5.2)')
+} catch (error) {
+  console.error('HederaProtectedPaymentService: Failed to initialize:', error instanceof Error ? error.message : error)
+}
+
+// Initialize TrustPolicy with configurable threshold
+let _trustPolicy: TrustPolicy | null = null
+try {
+  const threshold = parseInt(CONFIG.trustScoreThreshold, 10) || 30
+  _trustPolicy = new TrustPolicy(threshold)
+  console.log(`TrustPolicy initialized with threshold: ${threshold}`)
+} catch (error) {
+  console.error('TrustPolicy: Failed to initialize:', error instanceof Error ? error.message : error)
+}
+
+// Health check endpoint with optional Hedera status, HCS info, and reputation/service info
 app.get('/health', (req, res) => {
   const healthData = {
     status: 'ok',
@@ -217,8 +262,20 @@ app.get('/health', (req, res) => {
     hederaConnected: !!hederaClient,
     hcsEnabled: !!hcsRepository,
     reputationEnabled: _reputationService !== null,
+    trustEnabled: _trustPolicy !== null,
+    protectedPaymentEnabled: _protectedPaymentService !== null,
+    hederaScheduledPaymentEnabled: _hederaProtectedPaymentService !== null,
+    scheduleTtlSeconds: _hederaProtectedPaymentService?.scheduleTtlSeconds || 0,
     operatorId: CONFIG.hasOperatorCredentials() ? '***SET***' : 'not configured',
-    endpoints: ['/health', '/resource', '/payments', '/reputation/:payerAccountId'],
+    endpoints: [
+      '/health',
+      '/resource',
+      '/payments',
+      '/payments/protected',
+      '/payments/protected/:intentId',
+      '/reputation/:payerAccountId',
+      '/trust/:payerAccountId',
+    ],
   }
 
   res.json(healthData)
@@ -245,6 +302,170 @@ app.get('/resource', (req, res) => {
   }
 
   res.json(resource)
+})
+
+/**
+ * POST /payments/protected - Create a protected payment intent (Story 5.1 MVP + Story 5.2)
+ * When Hedera credentials are configured: creates real Scheduled Transaction
+ * When not configured or fails: creates mock intent for testing without network access
+ */
+app.post('/payments/protected', async (req, res) => {
+  try {
+    if (!_protectedPaymentService && !_hederaProtectedPaymentService) {
+      return res.status(503).json({
+        error: 'Protected Payment Service Not Available',
+        message: 'The Protected Payment Service is not initialized.',
+      })
+    }
+
+    const request = req.body
+    const { payerAccountId, recipientAccountId, amount, asset, network } = request
+
+    // Validate required fields
+    if (!payerAccountId || !recipientAccountId || !amount) {
+      return res.status(400).json({
+        error: 'Missing required fields',
+        message: 'payerAccountId, recipientAccountId, and amount are required',
+        requiredFields: ['payerAccountId', 'recipientAccountId', 'amount'],
+      })
+    }
+
+    // Prefer Hedera service for real scheduled transactions if available
+    let intent: ProtectedPaymentIntent | ScheduledPaymentIntent
+
+    if (_hederaProtectedPaymentService && _hederaProtectedPaymentService.isConnected()) {
+      // Use Hedera to create real scheduled transaction
+      const hederaIntent = await _hederaProtectedPaymentService.createScheduledPayment(
+        payerAccountId,
+        recipientAccountId,
+        amount,
+        asset || 'HBAR',
+      )
+
+      console.log(`Hedera schedule created: ${hederaIntent.intentId}`)
+      intent = hederaIntent
+    } else if (_protectedPaymentService) {
+      // Fallback to mock intent for testing or when Hedera unavailable
+      const mockIntent = _protectedPaymentService.createIntent(
+        payerAccountId,
+        recipientAccountId,
+        amount,
+        asset || 'HBAR',
+        network,
+      )
+
+      console.log(`Mock protected payment intent created: ${mockIntent.intentId}`)
+      intent = mockIntent
+    } else {
+      // Edge case: neither service available
+      return res.status(503).json({
+        error: 'Protected Payment Service Not Available',
+        message: 'No protected payment service is initialized.',
+      })
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Protected payment intent created',
+      intentId: intent.intentId,
+      ...intent,
+    })
+  } catch (error) {
+    console.error('/payments/protected endpoint error:', error instanceof Error ? error.message : error)
+
+    // Return mock intent on error to allow testing without network access
+    if (_protectedPaymentService) {
+      const fallbackIntent = _protectedPaymentService.createIntent(
+        req.body.payerAccountId,
+        req.body.recipientAccountId,
+        req.body.amount,
+        'HBAR',
+      )
+
+      res.status(201).json({
+        success: true,
+        message: 'Protected payment intent created (fallback to mock)',
+        intentId: fallbackIntent.intentId,
+        status: ProtectedPaymentIntentStatus.PENDING,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        isScheduled: false,
+        ...fallbackIntent,
+      })
+    } else {
+      res.status(500).json({
+        error: 'Failed to create protected payment intent',
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+})
+
+/**
+ * GET /payments/protected/:intentId - Retrieve a protected payment intent by ID (Story 5.1 MVP + Story 5.2)
+ * Returns full Hedera schedule details when scheduled, or mock intent data otherwise.
+ */
+app.get('/payments/protected/:intentId', async (req, res) => {
+  try {
+    if (!_hederaProtectedPaymentService && !_protectedPaymentService) {
+      return res.status(503).json({
+        error: 'Protected Payment Service Not Available',
+        message: 'The Protected Payment Service is not initialized.',
+      })
+    }
+
+    const intentId = req.params.intentId
+
+    // First try to get from Hedera service if available
+    let intent: ProtectedPaymentIntent | ScheduledPaymentIntent | undefined
+
+    if (_hederaProtectedPaymentService) {
+      intent = _hederaProtectedPaymentService.getIntent(intentId)
+    }
+
+    // If not found in Hedera service, try mock service as fallback
+    if (!intent && _protectedPaymentService) {
+      intent = _protectedPaymentService.getIntent(intentId) || undefined
+    }
+
+    // Try to query Hedera blockchain directly for schedule info if available
+    const hederaScheduleInfo = await (_hederaProtectedPaymentService as any)?.getScheduleOnChain(intentId)
+
+    if (hederaScheduleInfo) {
+      // Return with Hedera blockchain-verified status
+      return res.json({
+        success: true,
+        intentId: hederaScheduleInfo.intentId,
+        ...hederaScheduleInfo,
+      })
+    }
+
+    // Return stored intent if found
+    if (intent) {
+      res.json({
+        success: true,
+        intentId: intent.intentId,
+        ...intent,
+      })
+      return
+    }
+
+    // Intent not found - return 404
+    res.status(404).json({
+      error: 'Protected payment intent not found',
+      message: `Intent with ID "${intentId}" does not exist`,
+    })
+
+  } catch (error) {
+    console.error('/payments/protected/:intentId endpoint error:', error instanceof Error ? error.message : error)
+
+    // Clean error response without sensitive information
+    res.status(500).json({
+      error: 'Failed to retrieve protected payment intent',
+      message: error instanceof Error ? error.message : String(error),
+    })
+  } finally {
+    // Keep health check clean
+  }
 })
 
 /**
@@ -380,6 +601,68 @@ app.get('/reputation/:payerAccountId', (req, res) => {
         failedPayments: 0,
         successRate: 0,
         score: 0,
+      },
+    })
+  }
+})
+
+/**
+ * GET /trust/:payerAccountId - Get trust-based routing decision (Story 4.2)
+ */
+app.get('/trust/:payerAccountId', (req, res) => {
+  const payerAccountId = req.params.payerAccountId
+
+  if (!_trustPolicy) {
+    // Return default protected routing if policy not initialized
+    return res.status(503).json({
+      error: 'Trust Policy Not Available',
+      message: 'The Trust Policy is not initialized. Check server logs.',
+      data: {
+        payerAccountId,
+        score: 0,
+        level: PaymentRoutingLevel.NEW,
+        paymentPath: 'PROTECTED',
+      },
+    })
+  }
+
+  try {
+    // Get reputation to get the score for this payer
+    if (_reputationService) {
+      const reputation = _reputationService.getReputation(payerAccountId)
+
+      // Use policy to determine routing level based on score
+      const decision = _trustPolicy.evaluate(reputation, payerAccountId)
+
+      res.json({
+        payerAccountId,
+        score: decision.score,
+        level: decision.level,
+        paymentPath: decision.paymentPath,
+      })
+    } else {
+      // No reputation service - treat as unknown/new
+      return res.status(503).json({
+        error: 'Reputation Service Not Available',
+        message: 'Cannot determine trust level without reputation data.',
+        data: {
+          payerAccountId,
+          score: 0,
+          level: PaymentRoutingLevel.NEW,
+          paymentPath: 'PROTECTED',
+        },
+      })
+    }
+  } catch (error) {
+    console.error('Trust Policy: Failed to evaluate for', payerAccountId, error instanceof Error ? error.message : error)
+    res.status(500).json({
+      error: 'Failed to determine trust level',
+      message: error instanceof Error ? error.message : String(error),
+      data: {
+        payerAccountId,
+        score: 0,
+        level: PaymentRoutingLevel.NEW,
+        paymentPath: 'PROTECTED',
       },
     })
   }
