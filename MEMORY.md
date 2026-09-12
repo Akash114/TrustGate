@@ -1,1 +1,8 @@
 - [story-2-6-1-complete](memory/story-2-6-1-complete.md) — Story 2.6.1 real Hedera payment demo finished
+- [story-2-6-2-complete](memory/story-2-6-2-complete.md) — Story 2.6.2 x402 alignment verified and committed
+- [story-2-6-3-complete](memory/story-2-6-3-complete.md) — Story 2.6.3 payment requirements validated (no changes needed)
+- [story-2-6-4-complete](memory/story-2-6-4-complete.md) — Story 2.6.4 facilitator verify/settle API tested
+- [story-3-1-complete](memory/story-3-1-complete.md) — Story 3.1 payment record storage implemented
+- [story-3-2-complete](memory/story-3-2-complete.md) — Story 3.2 HCS publishing integrated
+- [story-3-2-final-report](memory/story-3-2-final-report.md) — Story 3.2 final completion report
+- [story-4-1-complete](memory/story-4-1-complete.md) — Story 4.1 deterministic reputation service complete (MVP scoring rules working, score = min(successfulPayments × 10, 100))

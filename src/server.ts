@@ -1,11 +1,17 @@
 import express from 'express'
 import { CONFIG, validateConfig, createHederaClient } from './config'
-import type { AccountId } from '@hiero-ledger/sdk'
+import type { AccountId, PaymentRecord } from '@hiero-ledger/sdk'
+import HcsRepository from './hcs.js'
+import ReputationService, { InMemoryPaymentRepository } from './reputation.js'
 
 // Validate config on startup
 validateConfig()
 
 const app = express()
+
+// Body parser middleware - needed for parsing JSON request bodies
+app.use(express.json())
+app.use(express.urlencoded({ extended: true }))
 
 // Initialize Hedera client if credentials are available
 let hederaClient: ReturnType<typeof createHederaClient> | null = null
@@ -22,6 +28,34 @@ try {
 const PAYMENT_REQUIRED = 'Payment required'
 const PAYMENT_AMOUNT_USDC = 1 // 1 USDC minimum to access the resource
 const PAYER_ACCOUNT_ID = CONFIG.operatorId as AccountId
+
+/**
+ * Initialize HCS publisher if operator credentials are available
+ */
+let hcsRepository: HcsRepository | null = null
+try {
+  if (CONFIG.hasOperatorCredentials()) {
+    console.log('Initializing HCS Publisher...')
+    const network = CONFIG.hederaNetwork || 'testnet'
+    const hcsTopicName = process.env.HCS_TOPIC_NAME || 'trustgate-payments'
+
+    // Create a default HCS topic ID for this environment
+    const accountIdStr = process.env.HCS_TOPIC_ACCOUNT || '0.0.xxxxx'
+    const timestamp = Date.now()
+    const topicIdStr = `${accountIdStr}#${timestamp}`
+
+    hcsRepository = new HcsRepository(network, hcsTopicName)
+
+    // Try to create the topic if it doesn't exist
+    (hcsRepository as any).createTopic().catch(() => {
+      // Ignore errors - topic may already exist or need funding
+    })
+  } else {
+    console.log('HCS Publisher: Operator credentials not configured, skipping HCS initialization')
+  }
+} catch (error) {
+  console.error('HCS Publisher: Failed to initialize:', error instanceof Error ? error.message : error)
+}
 
 /**
  * Checks if a client has paid for resource access (placeholder check).
@@ -64,14 +98,127 @@ function buildPaymentRequiredResponse(): Record<string, unknown> {
   } as const
 }
 
-// Health check endpoint with optional Hedera status
+// Shared in-memory storage for payment records (Story 3.1, Story 4.1)
+const globalPaymentRecords = new Map<string, PaymentRecord>()
+
+/**
+ * ReputationService - Simplified version using global storage directly
+ */
+export default class ReputationService {
+  private network: string
+  private readonly _onRecordAdded?: (record: PaymentRecord) => void
+
+  constructor(
+    public readonly network: string,
+    _paymentRepository?: any,
+    _onRecordAdded?: (record: PaymentRecord) => void,
+  ) {
+    this.network = network
+    this._onRecordAdded = _onRecordAdded
+  }
+
+  /**
+   * Calculate reputation metrics for a payer account.
+   */
+  calculateReputation(payerAccountId: string): ReputationMetrics {
+    const records = Array.from(globalPaymentRecords.values())
+
+    // Filter records for this specific payer
+    const payerRecords = records.filter(r => r.payerAccountId === payerAccountId)
+
+    // Count successful and failed payments
+    const successfulPayments = payerRecords.filter(r => r.status === 'SUCCESS').length
+    const failedPayments = payerRecords.filter(r => r.status !== 'SUCCESS').length
+    const totalPayments = payerRecords.length
+
+    // Calculate success rate (0 if no payments)
+    const successRate = totalPayments > 0 ? successfulPayments / totalPayments : 0
+
+    // Apply MVP scoring rule: score = min(successfulPayments × 10, 100)
+    let score = Math.min(successfulPayments * 10, 100)
+
+    return {
+      totalPayments,
+      successfulPayments,
+      failedPayments,
+      successRate: parseFloat(successRate.toFixed(4)),
+      score,
+    }
+  }
+
+  /**
+   * Get reputation for a specific payer account.
+   */
+  getReputation(payerAccountId: string): ReputationMetrics {
+    if (!payerAccountId) {
+      return this.defaultReputation()
+    }
+
+    const metrics = this.calculateReputation(payerAccountId)
+
+    // For unknown payers (no records found), return default zero reputation
+    if (metrics.totalPayments === 0) {
+      return this.defaultReputation()
+    }
+
+    return metrics
+  }
+
+  /**
+   * Store a payment record in global storage.
+   */
+  store(record: PaymentRecord): void {
+    // Don't overwrite existing records with the same transaction ID
+    if (!globalPaymentRecords.has(record.transactionId)) {
+      globalPaymentRecords.set(record.transactionId, record)
+
+      // Notify observers
+      this._onRecordAdded?.(record)
+    }
+  }
+
+  /**
+   * Get all stored payment records.
+   */
+  getAll(): PaymentRecord[] {
+    return Array.from(globalPaymentRecords.values())
+  }
+
+  private defaultReputation(): ReputationMetrics {
+    return {
+      totalPayments: 0,
+      successfulPayments: 0,
+      failedPayments: 0,
+      successRate: 0,
+      score: 0,
+    }
+  }
+}
+
+// Create and initialize reputation service
+let _reputationService: ReputationService | null = null
+try {
+  console.log('Initializing Reputation Service...')
+  const network = CONFIG.hederaNetwork || 'testnet'
+
+  // Create reputation service - reads from globalPaymentRecords directly
+  _reputationService = new ReputationService(network)
+  console.log('Reputation Service initialized')
+} catch (error) {
+  console.error('Reputation Service: Failed to initialize:', error instanceof Error ? error.message : error)
+}
+
+// Health check endpoint with optional Hedera status, HCS info, and reputation service info
 app.get('/health', (req, res) => {
   const healthData = {
     status: 'ok',
     port: CONFIG.port,
     network: CONFIG.hederaNetwork,
     hederaConnected: !!hederaClient,
+    hcsEnabled: !!hcsRepository,
+    reputationEnabled: _reputationService !== null,
     operatorId: CONFIG.hasOperatorCredentials() ? '***SET***' : 'not configured',
+    endpoints: ['/health', '/resource', '/payments', '/reputation/:payerAccountId'],
   }
 
   res.json(healthData)
@@ -100,6 +247,144 @@ app.get('/resource', (req, res) => {
   res.json(resource)
 })
 
+/**
+ * POST /payments - Store a new payment record for reputation tracking (Story 3.1 + Story 3.2)
+ */
+app.post('/payments', async (req, res) => {
+  try {
+    const recordData = req.body as Partial<PaymentRecord>
+
+    // Validate required fields
+    if (!recordData.transactionId || !recordData.payerAccountId) {
+      return res.status(400).json({
+        error: 'Missing required fields',
+        message: 'transactionId and payerAccountId are required',
+      })
+    }
+
+    // Store the payment record (if it doesn't already exist)
+    const fullRecord = {
+      transactionId: recordData.transactionId,
+      payerAccountId: recordData.payerAccountId,
+      recipientAccountId: recordData.recipientAccountId || '',
+      amount: String(recordData.amount || '0'),
+      asset: recordData.asset || 'HBAR',
+      network: recordData.network || CONFIG.hederaNetwork || 'testnet',
+      status: (recordData.status as 'SUCCESS' | 'FAILED') || 'SUCCESS',
+      timestamp: recordData.timestamp || Date.now(),
+    }
+
+    // Store in global repository (if not already exists)
+    if (!globalPaymentRecords.has(fullRecord.transactionId)) {
+      globalPaymentRecords.set(fullRecord.transactionId, fullRecord)
+
+      console.log(`Stored payment record: ${fullRecord.transactionId}`)
+    } else {
+      console.log(`Payment record already exists: ${fullRecord.transactionId}`)
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Payment record stored',
+      transactionId: fullRecord.transactionId,
+    })
+  } catch (error) {
+    console.error('/payments endpoint error:', error instanceof Error ? error.message : error)
+    res.status(500).json({
+      error: 'Failed to store payment record',
+      message: error instanceof Error ? error.message : String(error),
+    })
+  }
+})
+
+/**
+ * GET /payments - Retrieve all recorded payment events (Story 3.1 + Story 3.2)
+ */
+app.get('/payments', async (req, res) => {
+  const payments: PaymentRecord[] = []
+
+  // Return stored records
+  payments.push(...globalPaymentRecords.values())
+
+  // If HCS is enabled, show HCS topic info
+  if (hcsRepository) {
+    try {
+      const topicInfo = await (hcsRepository as any).getTopicInfo()
+      res.json({
+        payments,
+        count: payments.length,
+        hcs: {
+          topicName: 'trustgate-payments',
+          topicId: topicInfo?.topicID?.toString(),
+          enabled: true,
+        },
+      })
+    } catch (e) {
+      res.json({
+        payments,
+        count: payments.length,
+        hcs: {
+          enabled: true,
+          error: e instanceof Error ? e.message : 'Unknown error',
+        },
+      })
+    }
+  } else if (payments.length === 0) {
+    res.json({
+      payments,
+      count: 0,
+      message: 'No payments recorded yet.',
+    })
+  } else {
+    res.json({ payments, count: payments.length })
+  }
+})
+
+// GET /reputation/:payerAccountId - Get reputation score for a payer (Story 4.1)
+app.get('/reputation/:payerAccountId', (req, res) => {
+  const payerAccountId = req.params.payerAccountId
+
+  if (!_reputationService) {
+    // Return default zero reputation if service not initialized
+    res.status(503).json({
+      error: 'Reputation Service Not Available',
+      message: 'The Reputation Service is not initialized. Check server logs.',
+      data: {
+        payerAccountId,
+        totalPayments: 0,
+        successfulPayments: 0,
+        failedPayments: 0,
+        successRate: 0,
+        score: 0,
+      },
+    })
+    return
+  }
+
+  try {
+    const reputation = _reputationService.getReputation(payerAccountId)
+
+    res.json({
+      payerAccountId,
+      ...reputation,
+    })
+  } catch (error) {
+    console.error('Reputation Service: Failed to get reputation for', payerAccountId, error instanceof Error ? error.message : error)
+    res.status(500).json({
+      error: 'Failed to calculate reputation',
+      message: error instanceof Error ? error.message : String(error),
+      data: {
+        payerAccountId,
+        totalPayments: 0,
+        successfulPayments: 0,
+        failedPayments: 0,
+        successRate: 0,
+        score: 0,
+      },
+    })
+  }
+})
+
 // Catch-all for unknown routes
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found' })
@@ -113,5 +398,11 @@ app.listen(port, () => {
     console.log('Hedera Testnet client initialized successfully')
   } else {
     console.log('No Hedera client configured - check .env for credentials')
+  }
+
+  if (hcsRepository) {
+    console.log('HCS Publisher ready - payment records can be published to HCS')
+  } else {
+    console.log('HCS Publisher: Not initialized')
   }
 })

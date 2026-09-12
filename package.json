@@ -7,7 +7,9 @@
     "start": "tsx src/server.ts",
     "client": "tsx src/x402-client.ts",
     "payment-flow": "tsx src/x402-payment-flow.ts",
-    "demo-payment": "tsx src/demo-x402-payment.ts"
+    "demo-payment": "tsx src/demo-x402-payment.ts",
+    "test-story-3.1": "tsx scripts/test-payment-record.ts",
+    "story-3.2": "tsx scripts/publish-hcs-record.ts"
   },
   "dependencies": {
     "@hiero-ledger/sdk": "^2.85.0",

@@ -581,6 +581,33 @@ The MVP combines x402 payments, Hedera-native scheduled transactions, HCS-based 
 
 ## Setup
 
+### Story 3.1 — Payment Record Storage
+
+TrustGate now stores immutable payment records after successful settlement for future reputation scoring:
+
+```bash
+# Start local facilitator (includes /payments endpoint)
+npx tsx local-facilitator/index.ts &
+
+# Run the demo payment flow
+npm run demo-payment
+
+# View recorded payments
+curl http://localhost:3002/payments
+```
+
+Each successful payment creates a `PaymentRecord` with these fields:
+- `transactionId` - Hedera transaction ID from x402 settlement
+- `payerAccountId` - Account that sent the payment
+- `recipientAccountId` - Fee payer/receiver account
+- `amount` - Payment amount in smallest unit
+- `asset` - Asset type (e.g., "HBAR")
+- `network` - Hedera network (testnet/mainnet)
+- `status` - Always "SUCCESS" for recorded payments
+- `timestamp` - When the payment was recorded
+
+The records are stored in-memory for the session. Future stories will persist these to HCS and use them for reputation calculations.
+
 ### Running the Local x402 Facilitator
 
 When the online facilitator is unavailable, run the local version for testing:
